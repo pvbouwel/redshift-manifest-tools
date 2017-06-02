@@ -2,10 +2,13 @@ import boto3
 from util.S3File import S3File
 from util.Manifest import Manifest
 from util.S3ByteRange import S3ByteRange
+from util.S3FileTransfer import S3FileTransfer
+from util.S3FileCryptor import S3FileCryptor
+from util.Exceptions import DuplicateLocalFileException, LocalFileExistsAndConflictsWithTargetFileAndNoOverWrite
 import logging
 import os
 import sys
-import time
+import gzip
 
 s3helper_out_handle = None
 s3 = None
@@ -27,6 +30,7 @@ class S3Helper:
                 s3 = boto3.client('s3', region_name=region)
             else:
                 s3 = boto3.client('s3')
+
         return s3
 
     @staticmethod
@@ -47,97 +51,87 @@ class S3Helper:
         """
         if not isinstance(s3file_manifest, S3File):
             raise(Exception('retrieve_manifest can only be called with S3File parameter '+str(type(s3file_manifest))))
-        client = S3Helper.get_s3_connection()
-        response = client.get_object(Bucket=s3file_manifest.get_bucket(), Key=s3file_manifest.get_key())
-        manifest_as_string = response['Body'].read()
-        return Manifest(manifest_json_string=manifest_as_string)
+        manifest_as_string = s3file_manifest.get_file_content()
 
+        if isinstance(manifest_as_string, bytes):
+            manifest_as_string = manifest_as_string.decode('utf-8')
+
+        if isinstance(manifest_as_string, str):
+            manifest = Manifest(manifest_json_string=manifest_as_string, region=s3file_manifest.get_region())
+        else:
+            raise (Exception('Invalid type for manifest string {t}'.format(t=type(manifest_as_string))))
+
+        return manifest
 
     @staticmethod
-    def retrieve_file(s3_file, target_path, **kwargs):
+    def return_data_as_is(data):
+        return data
+
+    @staticmethod
+    def return_data_decompressed(data):
+        return gzip.decompress(data)
+
+    @staticmethod
+    def retrieve_file(s3_transfer, **kwargs):
         """
         
-        :param s3_file: S3File to retrieve 
-        :param target_path: target directory to store the files if None then it will write the content straight to the
-        global s3helper_out_handle
+        :param s3_transfer: S3FileTransfer that specifies S3File to retrieve and destination location 
         :param kwargs: 
           - symmetric_key=None: if provided then client-side encryption is assumed to decrypt the files
           - overwrite=False: if destination file exists overwrite it otherwise raise error
-          - target_file_name=None: name of target file. If None than last part of S3Path is used
+          - target_file_name=None: name of target file. If None than send content to stdout
         :return: 
         """
-        if 'symmetric_key' in kwargs:
-            symmetric_key = kwargs['symmetric_key']
-        else:
-            symmetric_key = None
+        symmetric_key = kwargs.get('symmetric_key', None)
+        overwrite = kwargs.get('overwrite', False)
+        s3_byte_range = S3ByteRange(int(kwargs.get('bytes_per_fetch', 10000000)))
 
-        if 'overwrite' in kwargs:
-            overwrite = kwargs['overwrite']
-        else:
-            overwrite = False
-
-        if 'retain_manifest' in kwargs:
-            retain_manifest = kwargs['retain_manifest']
-        else:
-            retain_manifest = False
-
-        if 'target_file_name' in kwargs:
-            target_file_name = kwargs['target_file_name']
-        else:
-            target_file_name = s3_file.get_s3_file_name()
-
-        if 'bytes_per_fetch' in kwargs:
-            bytes_per_fetch = S3ByteRange(int(kwargs['bytes_per_fetch']))
-        else:
-            bytes_per_fetch = S3ByteRange(10000000)
-
-        if target_path is None:
-            """
-            
-            """
+        if s3_transfer.get_local_file() is None:
+            # No destination file means the file content should be sent to stdout
             global s3helper_out_handle
             retries = 0
             back_off = 2
-            content_length = bytes_per_fetch.size
 
-            while content_length == bytes_per_fetch.size and retries < 10:
+            file_size = s3_transfer.get_size()
+
+            if s3_transfer.get_s3_file().get_key().endswith('.gz'):
+                if file_size > s3_byte_range.size:
+                    logging.fatal('Gzipped file is bigger than fetch file, not supported to stream {f}'.format(f=str(s3_transfer.get_s3_file())))
+                else:
+                    f_process = S3Helper.return_data_decompressed
+            else:
+                f_process = S3Helper.return_data_as_is
+
+            received_bytes = 0
+            while received_bytes < file_size:
+                logging.debug('Retrieving range {r}'.format(r=str(s3_byte_range)))
+
+                s3_file_fragment = s3_transfer.s3_file.get_range(s3_byte_range)
+                received_bytes += s3_file_fragment.get_size()
+
                 try:
-                    logging.debug('Retrieving range {r}'.format(r=str(bytes_per_fetch)))
-                    response = S3Helper.get_s3_connection().get_object(Bucket=s3_file.get_bucket(),
-                                                                   Key=s3_file.get_key(),
-                                                                   Range=str(bytes_per_fetch))
                     if s3helper_out_handle is None:
-                        sys.stdout.buffer.write(response['Body'].read())
+                        sys.stdout.buffer.write(f_process(s3_file_fragment.get_streaming_body().read()))
                     else:
-                        s3helper_out_handle.write(response['Body'].read())
-                    content_length = response['ContentLength']
-                    bytes_per_fetch.next()
-                    retries = 0
-                    back_off = 2
+                        s3helper_out_handle.write(f_process(s3_file_fragment.get_streaming_body().read()))
                 except Exception as e:
-                    if isinstance(e, AttributeError) or isinstance(e, TypeError):
-                        logging.fatal('Seems like invalid streamer is given for output: {e}'.format(e=str(e)))
-                        raise(e)
-                    logging.debug('Exception when getting byte range.')
-                    if hasattr(e,'response') \
-                            and 'Error' in e.response \
-                            and 'Code' in e.response['Error'] \
-                            and e.response['Error']['Code'] == 'InvalidRange':
-                        logging.debug('Requesting range that is not satisfiable.  Can happen when filesize can be split in chunks of bytes_per_fetch size.')
-                        content_length = 1
-                    else:
-                        logging.debug('Exception encountered while retrieving byte range: {e}'.format(e=str(e)))
-                        time.sleep(back_off)
-                        back_off *= 2
-                        retries += 1
+                    logging.fatal('Something went wrong writing data back.')
+                    logging.fatal(str(e))
+                    raise(e)
+
+                s3_byte_range.next()
 
         else:
-            destination_path = os.path.join(target_path, target_file_name)
+            s3_transfer.download()
 
-            transfer = boto3.s3.transfer.S3Transfer(s3)
-            response = transfer.download_file(s3_file.get_bucket(),
-                                   s3_file.get_key(), destination_path)
-            logging.info('Downloaded file {src} to {dest}'.format(src=str(s3_file), dest=destination_path))
+            if symmetric_key is not None:
+                logging.debug('Decryption is requested')
+                cryptor = S3FileCryptor(symmetric_key=symmetric_key)
+                try:
+                    cryptor.decrypt(s3_transfer)
+                except Exception as e:
+                    logging.WARN('Exception {e} encountered when decrypting transfer.'.format(e=str(e)))
+                    logging.WARN('No decryption performed.')
 
     @staticmethod
     def retrieve_files_from_manifest_file(s3file_manifest, target_path, **kwargs):
@@ -147,17 +141,50 @@ class S3Helper:
         :param target_path: 
         :param kwargs:
           - symmetric_key=None: if provided then client-side encryption is assumed to decrypt the files
-          - overwrite=False: if destination file exists overwrite it otherwise raise error
-          - retain_manifest=False: whether manifest file
+          - overwrite=False: if destination file exists raise error by default if set to true then overwrite
+          - region
+          - flatten_paths = False: if paths in manifest have different paths only use part after latest forwards slash
+          (/) as filename
         :return: 
         """
-        symmetric_key = None
-        overwrite = False
-        retain_manifest = False
+        symmetric_key = kwargs.get('symmetric_key', None)
+        overwrite = kwargs.get('overwrite', False)
+        region = kwargs.get('region', None)
+        flatten_paths = kwargs.get('flatten_paths', False)
+
+        if region is not None:
+            s3file_manifest.set_region(region)
 
         logging.debug('Retrieve manifest file from S3 location={s3loc}.'.format(s3loc=str(s3file_manifest)))
         s3manifest = S3Helper.retrieve_manifest(s3file_manifest)
 
+        if flatten_paths:
+            prefix = None
+        else:
+            prefix = s3manifest.get_common_path_prefix()
+
+        s3_transfers = []
+        local_files = []
+
         for s3file in s3manifest.s3_files:
+            if target_path is not None:
+                file_path = os.path.join(target_path, s3file.get_s3_file_name(prefix=prefix))
+                local_files.append(file_path)
+            else:
+                file_path = None
+
+            s3_transfers.append(S3FileTransfer(s3file, file_path))
+
+        if not overwrite:
+            if len(local_files) != len(set(local_files)):
+                raise(DuplicateLocalFileException('There is a duplicate collision in local_files {lf}'
+                                                  .format(lf=str(local_files))))
+
+            for local_file in local_files:
+                if os.path.exists(local_file):
+                    msg = 'Overwrite is disabled and local file {f} already exists.'.format(f=local_file)
+                    raise(LocalFileExistsAndConflictsWithTargetFileAndNoOverWrite(msg))
+
+        for s3_transfer in s3_transfers:
             logging.debug('Processing S3 file {file}'.format(file=str(s3file)))
-            S3Helper.retrieve_file(s3file, target_path, symmetric_key=symmetric_key, overwrite=overwrite)
+            S3Helper.retrieve_file(s3_transfer, symmetric_key=symmetric_key, overwrite=overwrite)

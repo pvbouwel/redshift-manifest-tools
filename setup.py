@@ -4,16 +4,17 @@ Thanks to the nice write up of https://kushaldas.in/posts/building-command-line-
 """
 
 setup(
-    name="redshift-redshift-manifest-tools",
-    version='0.2',
+    name="redshift-manifest-tools",
+    version='1.0.0',
     py_modules=['redshift_manifest_tools'],
     install_requires=[
         'Click',
-        'boto3'
+        'boto3',
+        'pycrypto'
     ],
     packages=find_packages(),
     entry_points='''
         [console_scripts]
-        redshift-redshift-manifest-tools=redshift_manifest_tools:cli_main
+        redshift-manifest-tools=redshift_manifest_tools:cli_main
     ''',
 )
