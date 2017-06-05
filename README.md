@@ -18,10 +18,12 @@ command to know which files to fetch.
 
 # Installation
 
+This code has been written while using Python 3.6 therefore it is recommended to use Python 3 for this project.
+
 ```bash
 git clone https://github.com/pvbouwel/redshift-manifest-tools.git
 cd redshift-manifest-tools.git
-sudo python3.6 ./setup.py install
+sudo python3 ./setup.py install
 ```
 
 If you receive an error when building `pycrypto` then install `gcc` on your host and try again.
