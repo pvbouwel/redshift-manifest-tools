@@ -11,14 +11,6 @@ else
   exit 33
 fi
 
-pip freeze | grep "nose==" 2>/dev/null
-if [ "$?" = "0" ]
-then
-  echo "nose is already installed run all tests"
-else
-  pip install nose
-fi
-
-nosetests
+python -m pytest
 
 cd "${CWD_BEFORE_SCRIPT}"

@@ -3,13 +3,12 @@ import boto3
 import click
 import logging
 import time
-from util.S3FileFragment import S3FileFragment
+from util.s3_file_fragment import S3FileFragment
 
 
 class InvalidS3PathException(Exception):
-    def __init__(self, message, line):
-        super(AssertionError, self).__init__(message)
-        self.line = line
+    def __init__(self, message):
+        super(InvalidS3PathException, self).__init__(message)
 
 
 class S3File:
@@ -31,6 +30,9 @@ class S3File:
         self.head_object = None
         self.retries = 0   # default value in reset_transfer_attempts
         self.back_off = 2  # default value in reset_transfer_attempts
+        self.x_amz_key = None
+        self.x_amz_iv = None
+        self.x_amz_matdesc = None
         s3path = None
         if len(args) == 1:
             # 1 arguments given should be s3path
@@ -51,8 +53,10 @@ class S3File:
 
         if s3path is not None:
             if not s3path.startswith('s3://'):
-                raise InvalidS3PathException('S3 path did not start with \'s3://\': {path}'.format(path=s3path))
-            #Bucket restrictions according to AWS doc
+                raise InvalidS3PathException(
+                    message='S3 path did not start with \'s3://\': {path}'.format(path=s3path)
+                )
+            # Bucket restrictions according to AWS doc
             # 3-63 characters long
             # One or more labels separated by a .
             # lowercase, numbers hyphens (must start with number or lowercase
@@ -85,7 +89,9 @@ class S3File:
             regex_s3_path = re.compile(pattern)
             match_result = regex_s3_path.match(s3path)
             if match_result is None:
-                raise InvalidS3PathException('Could not parse S3 path. Is a valid s3 path given? {path}'.format(path=s3path))
+                raise InvalidS3PathException(
+                    'Could not parse S3 path. Is a valid s3 path given? {path}'.format(path=s3path)
+                )
             self.bucket_name = match_result.groupdict().pop('bucket')
             self.key = match_result.groupdict().pop('key')
 
@@ -111,7 +117,12 @@ class S3File:
     def get_s3_file_name(self, prefix=None):
         """
         Only return the part after the latest forward slash (/) or the part after the given prefix
-        :return: 
+
+        Args:
+            prefix(str):
+
+        Returns:
+            str:
         """
         if prefix is None:
             s3_file_name_parts = self.key.split('/')
@@ -141,10 +152,13 @@ class S3File:
     def has_meta(self):
         return self.has_meta
 
+    # noinspection PyBroadException
     def get_meta(self):
         """
         Get the S3 object its metadata
-        :return: The head_object result from S3
+
+        Returns:
+            :The head_object result from S3
         """
         if not self.has_meta:
             try:
@@ -159,29 +173,31 @@ class S3File:
                     return self.get_meta()
                 else:
                     region_set_no_metadata = 'Could not get meta-data of S3Object and region was {r}.'
-                    raise(Exception(region_set_no_metadata.format(r=str(self.region))))
+                    raise Exception(region_set_no_metadata.format(r=str(self.region))) from e
         return self.head_object
 
+    # noinspection PyUnresolvedReferences
     def get_range(self, s3_byte_range):
         while not self.has_too_many_retries():
             try:
-                response = self.get_s3_connection().get_object(Bucket=self.get_bucket(),
-                                                        Key=self.get_key(),
-                                                        Range=str(s3_byte_range))
+                response = self.get_s3_connection().get_object(
+                    Bucket=self.get_bucket(),
+                    Key=self.get_key(),
+                    Range=str(s3_byte_range)
+                )
                 length = response['ContentLength']
                 self.reset_transfer_attempts()
-                success = True
+                return S3FileFragment(response['Body'], length, s3_byte_range)
             except Exception as e:
                 logging.debug('Exception when getting byte range.')
                 if hasattr(e, 'response') and 'Error' in e.response and 'Code' in e.response['Error'] \
                         and e.response['Error']['Code'] == 'InvalidRange':
                     logging.fatal('Requesting range that is not satisfiable.  Filesize = {fs}, byterange ={r}'
                                   'This should not happen.'.format(fs=str(self.get_size()), r=str(s3_byte_range)))
-                    raise(e)
+                    raise e
                 else:
                     logging.debug('Exception encountered while retrieving byte range: {e}'.format(e=str(e)))
                     self.failed_transfer_attempt()
-            return S3FileFragment(response['Body'], length, s3_byte_range)
         raise(Exception("Too many S3 contact attempts to get byte range."))
 
     def get_file_content(self):
@@ -189,9 +205,10 @@ class S3File:
         s3_file_fragment = self.get_range(s3_byte_range)
         return s3_file_fragment.get_streaming_body().read()
 
+    # noinspection PyUnresolvedReferences
     def download_file(self, destination_path):
         transfer = boto3.s3.transfer.S3Transfer(self.get_s3_connection())
-        response = transfer.download_file(self.get_bucket(),self.get_key(), destination_path)
+        return transfer.download_file(self.get_bucket(), self.get_key(), destination_path)
 
     def get_size(self):
         """
@@ -272,4 +289,4 @@ class S3PathParamType(click.ParamType):
         try:
             return S3File(value)
         except InvalidS3PathException as e:
-            self.fail('{val} is not a valid S3 path: {err}'.format(val=value,err=str(e)), param, ctx)
+            self.fail('{val} is not a valid S3 path: {err}'.format(val=value, err=str(e)), param, ctx)

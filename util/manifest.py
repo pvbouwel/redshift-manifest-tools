@@ -1,4 +1,4 @@
-from util.S3File import S3File
+from util.s3_file import S3File
 import json
 
 
@@ -7,11 +7,12 @@ class Manifest:
 
     def __init__(self, *args, **kwargs):
         """
-        
-        :param args: can be manifest_path
-        :param kwargsmanifest_path: 
-          - manifest_path = path to manifest
-          - manifest_json_string
+
+        Args:
+            *args: can be manifest path
+            **kwargs:
+              - manifest_path = path to manifest
+              - manifest_json_string
         """
         if len(args) == 1:
             # should be manifest_path
@@ -61,9 +62,10 @@ class Manifest:
         E.g. given the entries:
           s3://bucket1/path/to/a/file
           s3://bucket1/path/to/another/file
-         
-         this would return s3://bucket1/path/to/
-        :return: 
+
+        Returns:
+            str: this would return s3://bucket1/path/to/
+
         """
         if len(self.s3_files) == 0:
             return ''

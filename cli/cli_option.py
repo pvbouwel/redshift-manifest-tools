@@ -1,5 +1,5 @@
 class CliOption:
-    def __init__(self, name, description, mandatory = False, default=None):
+    def __init__(self, name, description, mandatory=False):
         self.name = name
         self.description = description
         self.mandatory = mandatory

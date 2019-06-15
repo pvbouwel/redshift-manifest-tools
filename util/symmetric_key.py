@@ -3,7 +3,7 @@ import click
 
 
 class SymmetricKey:
-    def __init__(self, data, base_64_encoded=True, **kwargs):
+    def __init__(self, data, base_64_encoded=True):
         if base_64_encoded:
             self.key_data = base64.b64decode(data)
         else:

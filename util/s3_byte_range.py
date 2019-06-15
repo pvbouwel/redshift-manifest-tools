@@ -1,6 +1,6 @@
 class S3ByteRange:
     def __init__(self, size=10000000):
-        self.size=size
+        self.size = size
         self.lower_bound = 0
         self.upper_bound = size - 1
 

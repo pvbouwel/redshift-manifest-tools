@@ -1,6 +1,5 @@
 import logging
 import hashlib
-from time import strftime
 import datetime
 import os
 
@@ -85,4 +84,3 @@ class S3FileTransfer:
             logging.warning('Temp file {tf} is still present, will be cleaned up as S3FileTransfer {sft} is destroyed'
                             .format(tf=self.temp_file, sft=str(self)))
             self.cleanup_temp_file()
-

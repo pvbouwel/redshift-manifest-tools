@@ -1,4 +1,4 @@
-class CliAction():
+class CliAction(object):
     def __init__(self, name, description, options=None):
         self.name = name
         self.description = description

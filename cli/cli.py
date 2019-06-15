@@ -1,11 +1,11 @@
 import click
 import logging
 import sys
-from cli.CliAction import CliAction
-from cli.CliOption import CliOption
-from util.S3Helper import S3Helper
-from util.S3File import S3PathParamType
-from util.SymmetricKey import SymmetricKeyParamType
+from cli.cli_action import CliAction
+from cli.cli_option import CliOption
+from util.s3_helper import S3Helper
+from util.s3_file import S3PathParamType
+from util.symmetric_key import SymmetricKeyParamType
 
 str_missing_mandatory_parameter = "Parameter {param} is mandatory when using action '{action}'"
 

@@ -1,10 +1,10 @@
 import boto3
-from util.S3File import S3File
-from util.Manifest import Manifest
-from util.S3ByteRange import S3ByteRange
-from util.S3FileTransfer import S3FileTransfer
-from util.S3FileCryptor import S3FileCryptor
-from util.Exceptions import DuplicateLocalFileException, LocalFileExistsAndConflictsWithTargetFileAndNoOverWrite
+from util.s3_file import S3File
+from util.manifest import Manifest
+from util.s3_byte_range import S3ByteRange
+from util.s3_file_transfer import S3FileTransfer
+from util.file_cryptor import S3EnvelopeFileCryptor
+from util.exceptions import DuplicateLocalFileException, LocalFileExistsAndConflictsWithTargetFileAndNoOverWrite
 import logging
 import os
 import sys
@@ -25,7 +25,6 @@ class S3Helper:
     def make_s3_connection(region=None):
         global s3
         if s3 is None:
-            s3helper_out_handle = sys.stdout
             if region is not None:
                 s3 = boto3.client('s3', region_name=region)
             else:
@@ -78,25 +77,25 @@ class S3Helper:
         :param s3_transfer: S3FileTransfer that specifies S3File to retrieve and destination location 
         :param kwargs: 
           - symmetric_key=None: if provided then client-side encryption is assumed to decrypt the files
-          - overwrite=False: if destination file exists overwrite it otherwise raise error
           - target_file_name=None: name of target file. If None than send content to stdout
         :return: 
         """
         symmetric_key = kwargs.get('symmetric_key', None)
-        overwrite = kwargs.get('overwrite', False)
         s3_byte_range = S3ByteRange(int(kwargs.get('bytes_per_fetch', 10000000)))
 
         if s3_transfer.get_local_file() is None:
             # No destination file means the file content should be sent to stdout
             global s3helper_out_handle
-            retries = 0
-            back_off = 2
 
             file_size = s3_transfer.get_size()
 
             if s3_transfer.get_s3_file().get_key().endswith('.gz'):
                 if file_size > s3_byte_range.size:
-                    logging.fatal('Gzipped file is bigger than fetch file, not supported to stream {f}'.format(f=str(s3_transfer.get_s3_file())))
+                    raise RuntimeError(
+                        'Gzipped file is bigger than fetch file, not supported to stream {f}'.format(
+                            f=str(s3_transfer.get_s3_file())
+                        )
+                    )
                 else:
                     f_process = S3Helper.return_data_decompressed
             else:
@@ -117,7 +116,7 @@ class S3Helper:
                 except Exception as e:
                     logging.fatal('Something went wrong writing data back.')
                     logging.fatal(str(e))
-                    raise(e)
+                    raise e
 
                 s3_byte_range.next()
 
@@ -126,7 +125,7 @@ class S3Helper:
 
             if symmetric_key is not None:
                 logging.debug('Decryption is requested')
-                cryptor = S3FileCryptor(symmetric_key=symmetric_key)
+                cryptor = S3EnvelopeFileCryptor(symmetric_key=symmetric_key, s3_transfer=s3_transfer)
                 try:
                     cryptor.decrypt(s3_transfer)
                 except Exception as e:
@@ -137,15 +136,18 @@ class S3Helper:
     def retrieve_files_from_manifest_file(s3file_manifest, target_path, **kwargs):
         """
         Retrieve files using a manifest file
-        :param s3file_manifest: object of type util.S3File.S3File()
-        :param target_path: 
-        :param kwargs:
-          - symmetric_key=None: if provided then client-side encryption is assumed to decrypt the files
-          - overwrite=False: if destination file exists raise error by default if set to true then overwrite
-          - region
-          - flatten_paths = False: if paths in manifest have different paths only use part after latest forwards slash
-          (/) as filename
-        :return: 
+        Args:
+            s3file_manifest(S3File):
+            target_path:
+            **kwargs:
+              - symmetric_key=None: if provided then client-side encryption is assumed to decrypt the files
+              - overwrite=False: if destination file exists raise error by default if set to true then overwrite
+              - region
+              - flatten_paths = False: if paths in manifest have different paths only use part after latest forwards
+                slash (/) as filename
+
+        Returns:
+
         """
         symmetric_key = kwargs.get('symmetric_key', None)
         overwrite = kwargs.get('overwrite', False)
@@ -186,5 +188,5 @@ class S3Helper:
                     raise(LocalFileExistsAndConflictsWithTargetFileAndNoOverWrite(msg))
 
         for s3_transfer in s3_transfers:
-            logging.debug('Processing S3 file {file}'.format(file=str(s3file)))
+            logging.debug('Processing S3 file {file}'.format(file=str(s3_transfer.get_s3_file())))
             S3Helper.retrieve_file(s3_transfer, symmetric_key=symmetric_key, overwrite=overwrite)
