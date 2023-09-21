@@ -4,6 +4,8 @@ The Redshift manifest tools allows to copy files that are unloaded to S3
  to local storage.  It uses a Redshift manifest file that is created by the unload
 command to know which files to fetch.  
 
+This is archived since I no longer actively maintain nor use it.
+
 
 # Choices made
  - Self-made implementation of S3 client-side decryption by using pypi cryptography library.  There are Python
